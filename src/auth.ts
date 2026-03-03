@@ -118,8 +118,9 @@ export async function loginFlow(): Promise<{ email: string }> {
           </html>
         `);
 
-        server.close();
-        resolve({ email });
+        server.close(() => {
+          resolve({ email });
+        });
       } catch (err) {
         res.writeHead(500);
         res.end("Authentication failed");
