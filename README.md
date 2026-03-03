@@ -12,12 +12,50 @@ npm install -g @rusintez/gmail
 
 ### 1. Create Google Cloud OAuth Credentials
 
+#### Option A: Using gcloud CLI (recommended)
+
+```bash
+# Install gcloud if needed: https://cloud.google.com/sdk/docs/install
+
+# Login and set project
+gcloud auth login
+gcloud projects create gmail-cli-project --name="Gmail CLI"  # or use existing
+gcloud config set project gmail-cli-project
+
+# Enable Gmail API
+gcloud services enable gmail.googleapis.com
+
+# Configure OAuth consent screen (required before creating credentials)
+# This opens a browser - select "External" user type, fill minimal info
+gcloud alpha iap oauth-brands create \
+  --application_title="Gmail CLI" \
+  --support_email="your-email@gmail.com"
+
+# Create OAuth 2.0 credentials
+gcloud alpha iap oauth-clients create \
+  $(gcloud alpha iap oauth-brands list --format='value(name)') \
+  --display_name="Gmail CLI Desktop"
+
+# List credentials to get client ID and secret
+gcloud alpha iap oauth-clients list \
+  $(gcloud alpha iap oauth-brands list --format='value(name)') \
+  --format='table(name.basename(), secret)'
+```
+
+#### Option B: Using Google Cloud Console (web UI)
+
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a new project (or select existing)
-3. Enable the Gmail API
-4. Go to Credentials → Create Credentials → OAuth 2.0 Client ID
-5. Application type: Desktop app
-6. Download or copy the Client ID and Client Secret
+3. Go to **APIs & Services** → **Enable APIs** → Search "Gmail API" → **Enable**
+4. Go to **APIs & Services** → **OAuth consent screen**:
+   - Select "External" user type
+   - Fill in app name, support email
+   - Add scopes: `gmail.readonly`, `gmail.send`, `gmail.modify`, `gmail.labels`
+   - Add your email as test user (while in testing mode)
+5. Go to **APIs & Services** → **Credentials**:
+   - Click **Create Credentials** → **OAuth 2.0 Client ID**
+   - Application type: **Desktop app**
+   - Copy the **Client ID** and **Client Secret**
 
 ### 2. Configure the CLI
 
@@ -33,6 +71,8 @@ gmail auth login  # Repeat for each account
 gmail auth list   # List all accounts
 gmail auth default user@gmail.com  # Set default
 ```
+
+> **Note:** While your OAuth app is in "Testing" mode, only emails added as test users can authenticate. To allow any Google account, submit your app for verification.
 
 ## Usage
 
