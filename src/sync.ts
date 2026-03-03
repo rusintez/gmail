@@ -198,32 +198,28 @@ async function syncAccount(
     removed.messages = 0;
     const seenIds = new Set<string>();
 
-    let pageToken = isFullSync ? undefined : state.pageTokens.messages || undefined;
-    let hasMore = true;
+    const savedPageToken = state.pageTokens.messages;
+    const hasSavedProgress = !!savedPageToken;
+    const BATCH_SIZE = 20;
 
-    while (hasMore) {
-      const result = await listMessages(gmail, {
-        maxResults: 100,
-        pageToken,
-      });
+    // Helper to fetch and save a page of messages
+    const fetchPage = async (pageToken?: string) => {
+      const result = await listMessages(gmail, { maxResults: 100, pageToken });
 
-      // Fetch full messages in parallel (batches of 20 to avoid rate limits)
-      const BATCH_SIZE = 20;
       for (let i = 0; i < result.messages.length; i += BATCH_SIZE) {
         const batch = result.messages.slice(i, i + BATCH_SIZE);
-        
+
         await Promise.all(
           batch.map(async (msg) => {
             const fullMsg = await getMessage(gmail, msg.id, "full");
             const headers = parseMessageHeaders(fullMsg);
-            
+
             writeResource(email, "messages", msg.id, {
               ...fullMsg,
               _headers: headers,
             });
             seenIds.add(msg.id);
 
-            // Download attachments if requested
             if (options.includeAttachments) {
               const attachments = getAttachmentInfos(fullMsg);
               await Promise.all(
@@ -242,20 +238,30 @@ async function syncAccount(
         options.onProgress?.({ collection: "messages", fetched: synced.messages });
       }
 
-      state.pageTokens.messages = result.nextPageToken || null;
-      saveSyncState(email, state);
+      return result.nextPageToken;
+    };
 
-      hasMore = !!result.nextPageToken;
-      pageToken = result.nextPageToken;
+    // Step 1: Always fetch newest first (no pageToken)
+    let nextPageToken = await fetchPage();
 
-      // For incremental sync, just get recent messages
-      if (!isFullSync && synced.messages >= 100) {
-        hasMore = false;
+    // Step 2: If we have saved progress from incomplete sync, continue from there
+    // Otherwise, for incremental sync, we're done after getting newest
+    if (hasSavedProgress || isFullSync) {
+      let pageToken: string | undefined = hasSavedProgress ? savedPageToken! : nextPageToken;
+
+      while (pageToken) {
+        state.pageTokens.messages = pageToken;
+        saveSyncState(email, state);
+
+        const next = await fetchPage(pageToken);
+        pageToken = next || undefined;
       }
     }
 
-    options.onProgress?.({ collection: "messages", fetched: synced.messages });
+    // Clear pageToken when complete
     state.pageTokens.messages = null;
+    saveSyncState(email, state);
+    options.onProgress?.({ collection: "messages", fetched: synced.messages });
 
     if (isFullSync) {
       const existing = getExistingIds(email, "messages");
@@ -274,20 +280,17 @@ async function syncAccount(
     removed.threads = 0;
     const seenIds = new Set<string>();
 
-    let pageToken = isFullSync ? undefined : state.pageTokens.threads || undefined;
-    let hasMore = true;
+    const savedPageToken = state.pageTokens.threads;
+    const hasSavedProgress = !!savedPageToken;
+    const BATCH_SIZE = 20;
 
-    while (hasMore) {
-      const result = await listThreads(gmail, {
-        maxResults: 100,
-        pageToken,
-      });
+    // Helper to fetch and save a page of threads
+    const fetchPage = async (pageToken?: string) => {
+      const result = await listThreads(gmail, { maxResults: 100, pageToken });
 
-      // Fetch full threads in parallel (batches of 20)
-      const BATCH_SIZE = 20;
       for (let i = 0; i < result.threads.length; i += BATCH_SIZE) {
         const batch = result.threads.slice(i, i + BATCH_SIZE);
-        
+
         await Promise.all(
           batch.map(async (thread) => {
             const fullThread = await getThread(gmail, thread.id, "metadata");
@@ -300,19 +303,30 @@ async function syncAccount(
         options.onProgress?.({ collection: "threads", fetched: synced.threads });
       }
 
-      state.pageTokens.threads = result.nextPageToken || null;
-      saveSyncState(email, state);
+      return result.nextPageToken;
+    };
 
-      hasMore = !!result.nextPageToken;
-      pageToken = result.nextPageToken;
+    // Step 1: Always fetch newest first (no pageToken)
+    let nextPageToken = await fetchPage();
 
-      if (!isFullSync && synced.threads >= 100) {
-        hasMore = false;
+    // Step 2: If we have saved progress from incomplete sync, continue from there
+    // Otherwise, for incremental sync, we're done after getting newest
+    if (hasSavedProgress || isFullSync) {
+      let pageToken: string | undefined = hasSavedProgress ? savedPageToken! : nextPageToken;
+
+      while (pageToken) {
+        state.pageTokens.threads = pageToken;
+        saveSyncState(email, state);
+
+        const next = await fetchPage(pageToken);
+        pageToken = next || undefined;
       }
     }
 
-    options.onProgress?.({ collection: "threads", fetched: synced.threads });
+    // Clear pageToken when complete
     state.pageTokens.threads = null;
+    saveSyncState(email, state);
+    options.onProgress?.({ collection: "threads", fetched: synced.threads });
 
     if (isFullSync) {
       const existing = getExistingIds(email, "threads");
