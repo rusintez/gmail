@@ -149,6 +149,51 @@ export async function getDraft(gmail: Gmail, id: string): Promise<Draft> {
   return res.data;
 }
 
+// Attachments
+export async function getAttachment(
+  gmail: Gmail,
+  messageId: string,
+  attachmentId: string,
+): Promise<string> {
+  const res = await gmail.users.messages.attachments.get({
+    userId: "me",
+    messageId,
+    id: attachmentId,
+  });
+  return res.data.data || "";
+}
+
+export interface AttachmentInfo {
+  attachmentId: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+}
+
+export function getAttachmentInfos(message: Message): AttachmentInfo[] {
+  const attachments: AttachmentInfo[] = [];
+
+  const extractFromParts = (parts: gmail_v1.Schema$MessagePart[] | undefined) => {
+    if (!parts) return;
+    for (const part of parts) {
+      if (part.body?.attachmentId && part.filename) {
+        attachments.push({
+          attachmentId: part.body.attachmentId,
+          filename: part.filename,
+          mimeType: part.mimeType || "application/octet-stream",
+          size: part.body.size || 0,
+        });
+      }
+      if (part.parts) {
+        extractFromParts(part.parts);
+      }
+    }
+  };
+
+  extractFromParts(message.payload?.parts);
+  return attachments;
+}
+
 // Send
 export async function sendMessage(
   gmail: Gmail,

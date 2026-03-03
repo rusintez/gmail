@@ -513,6 +513,7 @@ program
   .command("sync")
   .description("sync Gmail data to local JSON files (~/.local/share/gmail/)")
   .option("--full", "full sync (re-fetch everything)")
+  .option("--include-attachments", "download attachments to attachments/{messageId}/")
   .option(
     "-c, --collections <collections>",
     `collections to sync (comma-separated: ${COLLECTIONS.join(",")})`,
@@ -558,6 +559,7 @@ program
     const results = await sync({
       accounts,
       full: opts.full,
+      includeAttachments: opts.includeAttachments,
       collections,
       onProgress: (p) => {
         // Note: progress callback needs account context

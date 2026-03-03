@@ -18,6 +18,8 @@ import {
   getThread,
   listDrafts,
   getDraft,
+  getAttachment,
+  getAttachmentInfos,
   parseMessageHeaders,
   type Gmail,
   type Message,
@@ -110,6 +112,22 @@ function removeResource(email: string, collection: string, id: string): boolean 
   return false;
 }
 
+// Write attachment to file
+async function writeAttachment(
+  gmail: Gmail,
+  email: string,
+  messageId: string,
+  attachmentId: string,
+  filename: string,
+): Promise<void> {
+  const data = await getAttachment(gmail, messageId, attachmentId);
+  const dir = join(getDataDir(email), "attachments", messageId);
+  ensureDir(dir);
+  // Decode base64url to binary
+  const buffer = Buffer.from(data, "base64");
+  writeFileSync(join(dir, filename), buffer);
+}
+
 // Sync a single account
 async function syncAccount(
   gmail: Gmail,
@@ -117,6 +135,7 @@ async function syncAccount(
   options: {
     full?: boolean;
     collections?: Collection[];
+    includeAttachments?: boolean;
     onProgress?: ProgressCallback;
   } = {},
 ): Promise<{ synced: Record<string, number>; removed: Record<string, number> }> {
@@ -190,6 +209,17 @@ async function syncAccount(
         });
         seenIds.add(msg.id);
         synced.messages++;
+
+        // Download attachments if requested
+        if (options.includeAttachments) {
+          const attachments = getAttachmentInfos(fullMsg);
+          for (const att of attachments) {
+            await writeAttachment(gmail, email, msg.id, att.attachmentId, att.filename);
+          }
+          if (attachments.length > 0) {
+            synced.attachments = (synced.attachments || 0) + attachments.length;
+          }
+        }
 
         if (synced.messages % 10 === 0) {
           options.onProgress?.({ collection: "messages", fetched: synced.messages });
@@ -313,6 +343,7 @@ export interface SyncOptions {
   accounts?: Account[];
   collections?: Collection[];
   full?: boolean;
+  includeAttachments?: boolean;
   onProgress?: ProgressCallback;
 }
 
@@ -340,6 +371,7 @@ export async function sync(
         const result = await syncAccount(gmail, email, {
           full: options.full,
           collections: options.collections,
+          includeAttachments: options.includeAttachments,
           onProgress: options.onProgress,
         });
         results.push({ email, ...result });
