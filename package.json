@@ -1,0 +1,40 @@
+{
+  "name": "@rusintez/gmail",
+  "version": "1.0.0",
+  "description": "CLI for Gmail API - sync emails locally, search, send, manage labels",
+  "type": "module",
+  "bin": {
+    "gmail": "./bin/gmail.js"
+  },
+  "files": [
+    "src",
+    "bin"
+  ],
+  "scripts": {
+    "test": "tsx src/index.ts"
+  },
+  "keywords": [
+    "gmail",
+    "cli",
+    "email",
+    "google",
+    "api",
+    "sync"
+  ],
+  "author": "Vladimir Popov <rusintez@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rusintez/gmail.git"
+  },
+  "dependencies": {
+    "@commander-js/extra-typings": "^14.0.0",
+    "commander": "^14.0.3",
+    "googleapis": "^144.0.0",
+    "tsx": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.3",
+    "typescript": "^5.9.3"
+  }
+}
