@@ -21,6 +21,7 @@ import {
   getAttachment,
   getAttachmentInfos,
   parseMessageHeaders,
+  getMessageBody,
   type Gmail,
   type Message,
   type Label,
@@ -213,10 +214,12 @@ async function syncAccount(
           batch.map(async (msg) => {
             const fullMsg = await getMessage(gmail, msg.id, "full");
             const headers = parseMessageHeaders(fullMsg);
+            const body = getMessageBody(fullMsg);
 
             writeResource(email, "messages", msg.id, {
               ...fullMsg,
               _headers: headers,
+              _body: body,
             });
             seenIds.add(msg.id);
 

@@ -34,6 +34,7 @@ import {
   type Collection,
 } from "./sync.js";
 import { getStats, formatStats } from "./stats.js";
+import { migrateDecodeBody } from "./migrate-decode-body.js";
 
 const program = new Command()
   .name("gmail")
@@ -650,6 +651,37 @@ program
       console.log("Analyzing email data...");
       const stats = await getStats(email);
       console.log(formatStats(email, stats));
+    } catch (err) {
+      printError(err);
+      process.exit(1);
+    }
+  });
+
+// ============================================================================
+// MIGRATE COMMAND
+// ============================================================================
+program
+  .command("migrate")
+  .description("run migrations on synced data")
+  .argument("<migration>", "migration to run: decode-body")
+  .argument("[email]", "account email (runs on all if not specified)")
+  .action(async (migration, emailArg) => {
+    try {
+      if (migration !== "decode-body") {
+        console.error(`Unknown migration: ${migration}`);
+        console.error("Available migrations: decode-body");
+        process.exit(1);
+      }
+
+      const accounts = emailArg ? [emailArg] : listSyncedAccounts();
+      if (accounts.length === 0) {
+        console.error("No synced accounts found.");
+        process.exit(1);
+      }
+
+      for (const email of accounts) {
+        await migrateDecodeBody(email);
+      }
     } catch (err) {
       printError(err);
       process.exit(1);
