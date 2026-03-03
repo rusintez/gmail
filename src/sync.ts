@@ -112,6 +112,15 @@ function removeResource(email: string, collection: string, id: string): boolean 
   return false;
 }
 
+// Sanitize filename for filesystem (remove/replace problematic characters)
+function sanitizeFilename(filename: string): string {
+  return filename
+    .replace(/[/\\]/g, "_") // Replace path separators with underscore
+    .replace(/[<>:"|?*\x00-\x1f]/g, "_") // Replace other problematic chars
+    .replace(/^\.+/, "_") // Don't start with dots (hidden files)
+    .slice(0, 255); // Limit length
+}
+
 // Write attachment to file
 async function writeAttachment(
   gmail: Gmail,
@@ -125,7 +134,8 @@ async function writeAttachment(
   ensureDir(dir);
   // Decode base64url to binary
   const buffer = Buffer.from(data, "base64");
-  writeFileSync(join(dir, filename), buffer);
+  const safeFilename = sanitizeFilename(filename);
+  writeFileSync(join(dir, safeFilename), buffer);
 }
 
 // Sync a single account
