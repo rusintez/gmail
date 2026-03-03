@@ -33,6 +33,7 @@ import {
   COLLECTIONS,
   type Collection,
 } from "./sync.js";
+import { getStats, formatStats } from "./stats.js";
 
 const program = new Command()
   .name("gmail")
@@ -622,6 +623,37 @@ program
   .action((email) => {
     resetSyncState(email);
     console.log(`Sync state reset for "${email}".`);
+  });
+
+// ============================================================================
+// STATS COMMAND
+// ============================================================================
+program
+  .command("stats")
+  .description("show email statistics from synced data (requires duckdb)")
+  .argument("[email]", "account email (uses default if not specified)")
+  .action(async (emailArg) => {
+    try {
+      let email = emailArg;
+      if (!email) {
+        email = getDefaultAccountEmail();
+        if (!email) {
+          const accounts = listSyncedAccounts();
+          if (accounts.length === 0) {
+            console.error("No synced accounts. Run 'gmail sync' first.");
+            process.exit(1);
+          }
+          email = accounts[0];
+        }
+      }
+
+      console.log("Analyzing email data...");
+      const stats = await getStats(email);
+      console.log(formatStats(email, stats));
+    } catch (err) {
+      printError(err);
+      process.exit(1);
+    }
   });
 
 program.parse();

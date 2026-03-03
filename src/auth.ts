@@ -1,4 +1,4 @@
-import { google } from "googleapis";
+import { google, Auth } from "googleapis";
 import { createServer } from "node:http";
 import { URL } from "node:url";
 import { exec } from "node:child_process";
@@ -30,7 +30,7 @@ function openBrowser(url: string): void {
   exec(`${cmd} "${url}"`);
 }
 
-export function createOAuth2Client() {
+export function createOAuth2Client(): Auth.OAuth2Client {
   const creds = getOAuthCredentials();
   if (!creds) {
     throw new Error(
@@ -40,7 +40,7 @@ export function createOAuth2Client() {
   return new google.auth.OAuth2(creds.clientId, creds.clientSecret, REDIRECT_URI);
 }
 
-export async function getAuthenticatedClient(account?: Account) {
+export async function getAuthenticatedClient(account?: Account): Promise<{ client: Auth.OAuth2Client; email: string }> {
   const acc = account || getAccount();
   if (!acc) {
     throw new Error("No account configured. Run: gmail auth login");
