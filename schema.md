@@ -1,199 +1,185 @@
-# Gmail Schema Reference
+# Gmail CLI Data Schema
 
-This document describes all collections synced by `gmail sync` and their field semantics.
+Synced data is stored at `~/.local/share/gmail/{account}/` as JSON files.
 
-Data is stored at `~/.local/share/gmail/{account}/{collection}/{id}.json`
+## Directory Structure
 
----
+```
+~/.local/share/gmail/
+└── {email_sanitized}/           # e.g., user_at_gmail_com
+    ├── .sync-state.json         # Sync progress tracking
+    ├── profile.json             # Account profile
+    ├── labels/
+    │   └── {labelId}.json       # Gmail labels
+    ├── messages/
+    │   └── {messageId}.json     # Full messages with decoded body
+    ├── threads/
+    │   └── {threadId}.json      # Thread metadata
+    ├── drafts/
+    │   └── {draftId}.json       # Draft messages
+    └── attachments/
+        └── {messageId}/
+            └── {filename}       # Downloaded attachments
+```
 
-## Profile
+## Message Schema
 
-**File:** `profile.json`
+Each message file includes Gmail API data plus convenience fields:
 
-The Gmail account profile information.
+```json
+{
+  "id": "18d1a2b3c4d5e6f7",
+  "threadId": "18d1a2b3c4d5e6f7",
+  "snippet": "Preview text...",
+  "historyId": "12345678",
+  "internalDate": "1709251200000",
+  "sizeEstimate": 4521,
+  "labelIds": ["INBOX", "UNREAD", "CATEGORY_PERSONAL"],
+  
+  "payload": {
+    "mimeType": "multipart/alternative",
+    "headers": [
+      { "name": "From", "value": "sender@example.com" },
+      { "name": "To", "value": "recipient@example.com" },
+      { "name": "Subject", "value": "Email subject" },
+      ...
+    ],
+    "body": { "size": 0 },
+    "parts": [
+      {
+        "mimeType": "text/plain",
+        "body": { "data": "base64encodedcontent..." }
+      },
+      {
+        "mimeType": "text/html",
+        "body": { "data": "base64encodedcontent..." }
+      }
+    ]
+  },
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `emailAddress` | string | Account email address |
-| `messagesTotal` | number | Total messages in mailbox |
-| `threadsTotal` | number | Total threads in mailbox |
-| `historyId` | string | Current history ID for incremental sync |
+  "_headers": {
+    "from": "Sender Name <sender@example.com>",
+    "to": "recipient@example.com",
+    "subject": "Email subject",
+    "date": "Fri, 01 Mar 2024 12:00:00 +0000",
+    "messageId": "<unique-id@mail.example.com>"
+  },
 
----
+  "_body": "Decoded plaintext body content.\nReady for searching."
+}
+```
 
-## Labels
+### Convenience Fields
 
-**Directory:** `labels/`
+| Field | Description |
+|-------|-------------|
+| `_headers` | Parsed headers object for easy access (from, to, subject, date, messageId) |
+| `_body` | Decoded plaintext body (base64 decoded, ready for full-text search) |
 
-Gmail labels (folders/categories). Includes system labels and user-created labels.
+## Label Schema
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | Label ID (e.g., "INBOX", "Label_123") |
-| `name` | string | Display name |
-| `type` | string | Label type: `system` or `user` |
-| `messageListVisibility` | string | Visibility in message list: `show`, `hide` |
-| `labelListVisibility` | string | Visibility in label list: `labelShow`, `labelShowIfUnread`, `labelHide` |
-| `messagesTotal` | number | Total messages with this label |
-| `messagesUnread` | number | Unread messages with this label |
-| `threadsTotal` | number | Total threads with this label |
-| `threadsUnread` | number | Unread threads with this label |
-| `color` | object? | Label color (user labels only) |
-| `color.textColor` | string | Text color hex |
-| `color.backgroundColor` | string | Background color hex |
+```json
+{
+  "id": "Label_123456789",
+  "name": "My Label",
+  "type": "user",
+  "messageListVisibility": "show",
+  "labelListVisibility": "labelShow",
+  "messagesTotal": 42,
+  "messagesUnread": 5,
+  "threadsTotal": 30,
+  "threadsUnread": 3
+}
+```
 
-### System Labels
+## Thread Schema
 
-| Label ID | Description |
-|----------|-------------|
-| `INBOX` | Inbox |
-| `SENT` | Sent mail |
-| `DRAFT` | Drafts |
-| `TRASH` | Trash |
-| `SPAM` | Spam |
-| `STARRED` | Starred |
-| `IMPORTANT` | Important |
-| `UNREAD` | Unread (pseudo-label) |
-| `CATEGORY_PRIMARY` | Primary category |
-| `CATEGORY_SOCIAL` | Social category |
-| `CATEGORY_PROMOTIONS` | Promotions category |
-| `CATEGORY_UPDATES` | Updates category |
-| `CATEGORY_FORUMS` | Forums category |
+```json
+{
+  "id": "18d1a2b3c4d5e6f7",
+  "historyId": "12345678",
+  "messages": [
+    {
+      "id": "18d1a2b3c4d5e6f7",
+      "threadId": "18d1a2b3c4d5e6f7",
+      "snippet": "Message preview...",
+      "payload": {
+        "mimeType": "text/plain",
+        "headers": [...]
+      },
+      "labelIds": ["INBOX"],
+      "internalDate": "1709251200000"
+    }
+  ]
+}
+```
 
----
+## Sync State Schema
 
-## Messages
+```json
+{
+  "lastSyncAt": "2024-03-01T12:00:00.000Z",
+  "pageTokens": {
+    "messages": null,
+    "threads": "token-for-resuming"
+  }
+}
+```
 
-**Directory:** `messages/`
+- `pageTokens.messages = null` means messages sync is complete
+- Non-null pageToken means sync was interrupted and will resume from that point
 
-Individual email messages.
+## DuckDB Queries
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | Message ID |
-| `threadId` | string | Thread this message belongs to |
-| `labelIds` | string[] | Labels applied to this message |
-| `snippet` | string | Short preview of message content |
-| `historyId` | string | History ID when message was modified |
-| `internalDate` | string | Timestamp (ms since epoch) when received |
-| `sizeEstimate` | number | Estimated size in bytes |
-| `payload` | object | Message content (see below) |
-| `_headers` | object | Extracted headers (added by sync) |
+Query your email data using DuckDB:
 
-### Payload Structure
+```bash
+# Install duckdb
+brew install duckdb
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `partId` | string | Part identifier |
-| `mimeType` | string | MIME type (e.g., "text/plain", "multipart/alternative") |
-| `filename` | string | Filename for attachments |
-| `headers` | array | Email headers |
-| `body` | object | Body content |
-| `body.size` | number | Body size in bytes |
-| `body.data` | string | Base64url-encoded body content |
-| `body.attachmentId` | string | Attachment ID (for large attachments) |
-| `parts` | array | Sub-parts for multipart messages |
+# Run queries
+cd ~/.local/share/gmail/user_at_gmail_com
+duckdb
+```
 
-### Extracted Headers (_headers)
+### Example Queries
 
-Added by sync for easier access:
+```sql
+-- Count messages
+SELECT count(*) FROM read_json_auto('messages/*.json', maximum_object_size=10485760);
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `from` | string | From address |
-| `to` | string | To addresses |
-| `subject` | string | Subject line |
-| `date` | string | Date header |
-| `messageId` | string | Message-ID header |
+-- Search message body
+SELECT _headers.subject, _headers.from, _body[1:100] as preview
+FROM read_json_auto('messages/*.json', maximum_object_size=10485760)
+WHERE _body ILIKE '%invoice%'
+LIMIT 10;
 
-### Common Headers
+-- Top senders
+SELECT _headers.from as sender, count(*) as count
+FROM read_json_auto('messages/*.json', maximum_object_size=10485760)
+GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
 
-| Header | Description |
-|--------|-------------|
-| `From` | Sender address |
-| `To` | Recipient addresses |
-| `Cc` | CC addresses |
-| `Bcc` | BCC addresses (usually not visible) |
-| `Subject` | Email subject |
-| `Date` | Send date |
-| `Message-ID` | Unique message identifier |
-| `In-Reply-To` | Message ID being replied to |
-| `References` | Thread reference chain |
-| `Content-Type` | MIME type and charset |
+-- Messages by month
+SELECT strftime(to_timestamp(internalDate::bigint/1000), '%Y-%m') as month, count(*)
+FROM read_json_auto('messages/*.json', maximum_object_size=10485760)
+GROUP BY 1 ORDER BY 1 DESC;
 
----
+-- Unread messages
+SELECT _headers.subject, _headers.from
+FROM read_json_auto('messages/*.json', maximum_object_size=10485760),
+  LATERAL (SELECT unnest(labelIds) as label)
+WHERE label = 'UNREAD';
 
-## Threads
+-- Messages with attachments by sender
+SELECT _headers.from, count(*), printf('%.1f MB', sum(sizeEstimate)/1024.0/1024.0) as size
+FROM read_json_auto('messages/*.json', maximum_object_size=10485760)
+WHERE sizeEstimate > 100000
+GROUP BY 1 ORDER BY sum(sizeEstimate) DESC LIMIT 10;
+```
 
-**Directory:** `threads/`
+## Gmail API Reference
 
-Conversation threads grouping related messages.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | Thread ID |
-| `snippet` | string | Preview of most recent message |
-| `historyId` | string | History ID when thread was modified |
-| `messages` | array | Messages in thread (when fetched with format=full) |
-
----
-
-## Drafts
-
-**Directory:** `drafts/`
-
-Draft messages not yet sent.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | Draft ID |
-| `message` | object | The draft message content |
-| `message.id` | string | Message ID |
-| `message.threadId` | string | Thread ID (if reply) |
-| `message.labelIds` | string[] | Always includes "DRAFT" |
-| `message.payload` | object | Message content (same as Messages) |
-
----
-
-## Sync State
-
-**File:** `.sync-state.json`
-
-Internal file tracking sync progress (not part of Gmail API).
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `lastSyncAt` | datetime? | Last successful sync time |
-| `pageTokens` | object | Pagination tokens for resume |
-| `historyId` | string? | Last history ID for incremental sync |
-
----
-
-## Common Patterns
-
-### Timestamps
-
-- `internalDate` is milliseconds since Unix epoch as a string
-- Header `Date` is RFC 2822 format
-
-### Base64url Encoding
-
-Message body data uses base64url encoding (URL-safe base64):
-- Replace `+` with `-`
-- Replace `/` with `_`
-- No padding `=`
-
-Decode with: `Buffer.from(data, 'base64').toString('utf-8')`
-
-### Labels vs Folders
-
-Gmail uses labels, not folders. A message can have multiple labels.
-To "move" a message, add the destination label and remove the source label.
-
-### Archive
-
-Archiving removes the `INBOX` label but keeps the message accessible.
-
-### Read/Unread
-
-The `UNREAD` label indicates unread status. Remove it to mark as read.
+- [Messages](https://developers.google.com/gmail/api/reference/rest/v1/users.messages)
+- [Threads](https://developers.google.com/gmail/api/reference/rest/v1/users.threads)
+- [Labels](https://developers.google.com/gmail/api/reference/rest/v1/users.labels)
+- [Search operators](https://support.google.com/mail/answer/7190)

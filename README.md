@@ -2,40 +2,28 @@
 
 CLI for Gmail API - sync emails locally, search, send, manage labels. Supports multiple accounts.
 
+## Features
+
+- **Sync** emails locally as JSON for offline access and searching
+- **Search** with DuckDB across thousands of messages instantly
+- **Stats** dashboard with analytics (top senders, domains, activity patterns)
+- **Multi-account** support with easy switching
+- **Rate limit handling** - auto-retry with exponential backoff
+- **Resumable sync** - interrupted syncs continue where they left off
+- **Attachments** - optionally download all attachments
+
 ## Install
 
 ```bash
 npm install -g @rusintez/gmail
+
+# Requires duckdb for stats command
+brew install duckdb
 ```
 
 ## Setup
 
 ### 1. Create Google Cloud OAuth Credentials
-
-#### Option A: Using gcloud CLI + Console
-
-```bash
-# Install gcloud CLI (macOS)
-brew install --cask google-cloud-sdk
-# Or: curl https://sdk.cloud.google.com | bash
-
-# Login and create project
-gcloud auth login
-gcloud projects create my-gmail-cli --name="Gmail CLI"
-gcloud config set project my-gmail-cli
-
-# Enable Gmail API
-gcloud services enable gmail.googleapis.com
-```
-
-Then create OAuth credentials in Console (required - gcloud doesn't support this directly):
-1. Go to https://console.cloud.google.com/apis/credentials
-2. Click **Configure Consent Screen** → External → Create
-3. Fill app name, support email → Save
-4. **Create Credentials** → **OAuth 2.0 Client ID** → Desktop app
-5. Copy Client ID and Client Secret
-
-#### Option B: Web Console only (simplest)
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a new project (or select existing)
@@ -43,7 +31,6 @@ Then create OAuth credentials in Console (required - gcloud doesn't support this
 4. Go to **APIs & Services** → **OAuth consent screen**:
    - Select "External" user type
    - Fill in app name, support email
-   - Add scopes: `gmail.readonly`, `gmail.send`, `gmail.modify`, `gmail.labels`
    - Add your email as test user (while in testing mode)
 5. Go to **APIs & Services** → **Credentials**:
    - Click **Create Credentials** → **OAuth 2.0 Client ID**
@@ -65,9 +52,31 @@ gmail auth list   # List all accounts
 gmail auth default user@gmail.com  # Set default
 ```
 
-> **Note:** While your OAuth app is in "Testing" mode, only emails added as test users can authenticate. To allow any Google account, submit your app for verification.
+> **Note:** While your OAuth app is in "Testing" mode, only emails added as test users can authenticate.
 
 ## Usage
+
+### Sync Emails Locally
+
+```bash
+gmail sync                          # Incremental sync (newest 100)
+gmail sync --full                   # Full sync (all messages)
+gmail sync --include-attachments    # Download attachments too
+gmail sync -a user@gmail.com        # Sync specific account
+```
+
+Sync is **resumable** - if interrupted, it continues where it left off.
+
+Data is stored at `~/.local/share/gmail/{account}/`
+
+### View Stats
+
+```bash
+gmail stats                    # Stats for default account
+gmail stats user@gmail.com     # Stats for specific account
+```
+
+Shows: message counts, top senders, domains, activity by time, labels, largest senders by size.
 
 ### Read Emails
 
@@ -80,7 +89,6 @@ gmail inbox -q "from:boss"     # Gmail search query
 
 gmail message <id>             # Full message content
 gmail thread <id>              # Full conversation thread
-gmail threads                  # List threads
 gmail search "subject:invoice" # Search messages
 ```
 
@@ -108,19 +116,6 @@ gmail unlabel <id> STARRED     # Remove label
 gmail labels                   # List all labels
 ```
 
-### Sync (Local Cache)
-
-Sync all Gmail data to local JSON files for offline access and searching.
-
-```bash
-gmail sync                     # Incremental sync all accounts
-gmail sync --full              # Full sync (re-fetch all)
-gmail sync -a user@gmail.com   # Sync specific account
-gmail sync -c messages,labels  # Sync specific collections
-```
-
-Data is stored at `~/.local/share/gmail/{account}/`
-
 ### Sync Management
 
 ```bash
@@ -128,6 +123,41 @@ gmail sync-status              # List synced accounts
 gmail sync-status user@gmail.com  # Status for specific account
 gmail sync-reset user@gmail.com   # Reset state (next sync = full)
 ```
+
+### Migrations
+
+```bash
+gmail migrate decode-body              # Decode body in all accounts
+gmail migrate decode-body user@gmail.com  # Specific account
+```
+
+## Query with DuckDB
+
+After syncing, query your emails with SQL:
+
+```bash
+cd ~/.local/share/gmail/user_at_gmail_com
+duckdb
+```
+
+```sql
+-- Search message body
+SELECT _headers.subject, _body[1:100] as preview
+FROM read_json_auto('messages/*.json', maximum_object_size=10485760)
+WHERE _body ILIKE '%invoice%';
+
+-- Top senders
+SELECT _headers.from, count(*) as count
+FROM read_json_auto('messages/*.json', maximum_object_size=10485760)
+GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
+
+-- Messages by month
+SELECT strftime(to_timestamp(internalDate::bigint/1000), '%Y-%m') as month, count(*)
+FROM read_json_auto('messages/*.json', maximum_object_size=10485760)
+GROUP BY 1 ORDER BY 1 DESC;
+```
+
+See [schema.md](schema.md) for full data schema and more query examples.
 
 ## Output Formats
 
@@ -161,6 +191,7 @@ See [Gmail search operators](https://support.google.com/mail/answer/7190) for fu
 
 - Config: `~/.config/gmail-cli/config.json`
 - Synced data: `~/.local/share/gmail/`
+- Schema: [schema.md](schema.md)
 
 ## License
 
