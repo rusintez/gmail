@@ -197,33 +197,39 @@ async function syncAccount(
         pageToken,
       });
 
-      for (const msg of result.messages) {
-        // Fetch full message
-        const fullMsg = await getMessage(gmail, msg.id, "full");
-        const headers = parseMessageHeaders(fullMsg);
+      // Fetch full messages in parallel (batches of 20 to avoid rate limits)
+      const BATCH_SIZE = 20;
+      for (let i = 0; i < result.messages.length; i += BATCH_SIZE) {
+        const batch = result.messages.slice(i, i + BATCH_SIZE);
         
-        // Store with extracted headers for easier querying
-        writeResource(email, "messages", msg.id, {
-          ...fullMsg,
-          _headers: headers,
-        });
-        seenIds.add(msg.id);
-        synced.messages++;
+        await Promise.all(
+          batch.map(async (msg) => {
+            const fullMsg = await getMessage(gmail, msg.id, "full");
+            const headers = parseMessageHeaders(fullMsg);
+            
+            writeResource(email, "messages", msg.id, {
+              ...fullMsg,
+              _headers: headers,
+            });
+            seenIds.add(msg.id);
 
-        // Download attachments if requested
-        if (options.includeAttachments) {
-          const attachments = getAttachmentInfos(fullMsg);
-          for (const att of attachments) {
-            await writeAttachment(gmail, email, msg.id, att.attachmentId, att.filename);
-          }
-          if (attachments.length > 0) {
-            synced.attachments = (synced.attachments || 0) + attachments.length;
-          }
-        }
+            // Download attachments if requested
+            if (options.includeAttachments) {
+              const attachments = getAttachmentInfos(fullMsg);
+              await Promise.all(
+                attachments.map((att) =>
+                  writeAttachment(gmail, email, msg.id, att.attachmentId, att.filename),
+                ),
+              );
+              if (attachments.length > 0) {
+                synced.attachments = (synced.attachments || 0) + attachments.length;
+              }
+            }
+          }),
+        );
 
-        if (synced.messages % 10 === 0) {
-          options.onProgress?.({ collection: "messages", fetched: synced.messages });
-        }
+        synced.messages += batch.length;
+        options.onProgress?.({ collection: "messages", fetched: synced.messages });
       }
 
       state.pageTokens.messages = result.nextPageToken || null;
@@ -267,16 +273,21 @@ async function syncAccount(
         pageToken,
       });
 
-      for (const thread of result.threads) {
-        // Fetch full thread with messages
-        const fullThread = await getThread(gmail, thread.id, "metadata");
-        writeResource(email, "threads", thread.id, fullThread);
-        seenIds.add(thread.id);
-        synced.threads++;
+      // Fetch full threads in parallel (batches of 20)
+      const BATCH_SIZE = 20;
+      for (let i = 0; i < result.threads.length; i += BATCH_SIZE) {
+        const batch = result.threads.slice(i, i + BATCH_SIZE);
+        
+        await Promise.all(
+          batch.map(async (thread) => {
+            const fullThread = await getThread(gmail, thread.id, "metadata");
+            writeResource(email, "threads", thread.id, fullThread);
+            seenIds.add(thread.id);
+          }),
+        );
 
-        if (synced.threads % 10 === 0) {
-          options.onProgress?.({ collection: "threads", fetched: synced.threads });
-        }
+        synced.threads += batch.length;
+        options.onProgress?.({ collection: "threads", fetched: synced.threads });
       }
 
       state.pageTokens.threads = result.nextPageToken || null;
