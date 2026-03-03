@@ -15,7 +15,10 @@ npm install -g @rusintez/gmail
 #### Option A: Using gcloud CLI (recommended)
 
 ```bash
-# Install gcloud if needed: https://cloud.google.com/sdk/docs/install
+# Install gcloud CLI
+# macOS:
+brew install --cask google-cloud-sdk
+# Or download installer: https://cloud.google.com/sdk/docs/install
 
 # Login and set project
 gcloud auth login
