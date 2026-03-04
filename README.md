@@ -11,6 +11,8 @@ CLI for Gmail API - sync emails locally, search, send, manage labels. Supports m
 - **Rate limit handling** - auto-retry with exponential backoff
 - **Resumable sync** - interrupted syncs continue where they left off
 - **Attachments** - optionally download all attachments
+- **Mutations** - archive, trash, mark read/unread, label management
+- **Smart filtering** - spam and trash automatically excluded from sync
 
 ## Install
 
@@ -67,6 +69,8 @@ gmail sync -a user@gmail.com        # Sync specific account
 
 Sync is **resumable** - if interrupted, it continues where it left off.
 
+**Exclusions**: Spam and trash messages are automatically excluded from sync. Attachments from promotional emails are skipped (security).
+
 Data is stored at `~/.local/share/gmail/{account}/`
 
 ### View Stats
@@ -102,13 +106,17 @@ gmail send --to a@x.com --cc b@x.com --subject "Meeting" --body "Let's meet"
 ### Manage Messages
 
 ```bash
-gmail archive <id>             # Remove from inbox
-gmail trash <id>               # Move to trash
+gmail archive <id>             # Remove from inbox (stays in All Mail)
+gmail trash <id>               # Move to trash (auto-deleted in 30 days)
 gmail mark-read <id>           # Mark as read
 gmail mark-unread <id>         # Mark as unread
 gmail label <id> STARRED       # Add label
 gmail unlabel <id> STARRED     # Remove label
 ```
+
+**Read/unread**: Tracked via the `UNREAD` label in `labelIds`. Query with `is:unread` or check `labelIds` in JSON.
+
+**Archive vs Delete**: Archive keeps the message accessible in All Mail and search. Trash eventually deletes it.
 
 ### Labels
 

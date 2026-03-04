@@ -49,16 +49,22 @@ gmail send --to user@x.com --subject "Hi" --body "Hello"
 gmail send --to a@x.com --cc b@x.com --subject "FYI" --body "..."
 ```
 
-### Manage
+### Manage (Mutations)
+
+All mutations sync to Gmail server immediately:
 
 ```bash
-gmail archive <id>             # Remove from inbox
+gmail archive <id>             # Remove from inbox (keeps in All Mail)
 gmail trash <id>               # Move to trash
-gmail mark-read <id>           # Mark read
-gmail mark-unread <id>         # Mark unread
+gmail mark-read <id>           # Mark read (removes UNREAD label)
+gmail mark-unread <id>         # Mark unread (adds UNREAD label)
 gmail label <id> STARRED       # Add label
 gmail unlabel <id> IMPORTANT   # Remove label
 ```
+
+**Read/unread state**: Stored in `labelIds` array - presence of `UNREAD` = unread.
+
+**Archive vs Trash**: Archive removes from INBOX but message remains in All Mail. Trash moves to trash folder (auto-deleted after 30 days).
 
 ### Labels
 
@@ -80,11 +86,14 @@ gmail search "category:primary newer_than:7d"
 
 Sync Gmail data to local JSON files for offline access and searching.
 
+**Exclusions**: Spam and Trash are automatically excluded from sync (never downloaded).
+
 ```bash
-gmail sync                     # Incremental sync all accounts
-gmail sync --full              # Full sync
-gmail sync -a user@gmail.com   # Sync one account
-gmail sync -c messages,labels  # Sync specific collections
+gmail sync                          # Incremental sync all accounts
+gmail sync --full                   # Full sync
+gmail sync --include-attachments    # Include attachments
+gmail sync -a user@gmail.com        # Sync one account
+gmail sync -c messages,labels       # Sync specific collections
 ```
 
 ### Sync Status
@@ -115,6 +124,9 @@ gmail sync-reset user@x.com    # Reset state
 | messages | Individual emails with headers and body |
 | threads | Conversation threads |
 | drafts | Draft messages |
+| attachments | Downloaded attachments (when `--include-attachments`) |
+
+**Note**: Attachments from promotional emails (CATEGORY_PROMOTIONS) are skipped (security). Spam/trash are excluded entirely.
 
 See `schema.md` for full field documentation.
 

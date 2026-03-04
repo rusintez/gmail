@@ -22,6 +22,8 @@ import {
   getAttachmentInfos,
   parseMessageHeaders,
   getMessageBody,
+  listHistory,
+  isHistoryIdExpiredError,
   type Gmail,
   type Message,
   type Label,
@@ -139,6 +141,135 @@ async function writeAttachment(
   writeFileSync(join(dir, safeFilename), buffer);
 }
 
+// Labels that indicate suspicious/unwanted messages
+const EXCLUDED_LABELS = new Set(["SPAM", "TRASH"]);
+
+// Check if message should be excluded from sync entirely
+function shouldExcludeMessage(labelIds: string[] | undefined): boolean {
+  if (!labelIds) return false;
+  return labelIds.some((id) => EXCLUDED_LABELS.has(id));
+}
+
+// Labels that indicate we should NOT download attachments (security risk)
+const SKIP_ATTACHMENT_LABELS = new Set(["SPAM", "TRASH", "CATEGORY_PROMOTIONS"]);
+
+// Check if message should have attachments downloaded
+function shouldDownloadAttachments(labelIds: string[] | undefined): boolean {
+  if (!labelIds) return true;
+  return !labelIds.some((id) => SKIP_ATTACHMENT_LABELS.has(id));
+}
+
+// Helper to fetch and save a message with all metadata
+// Returns true if message was saved, false if excluded
+async function fetchAndSaveMessage(
+  gmail: Gmail,
+  email: string,
+  messageId: string,
+  includeAttachments?: boolean,
+): Promise<boolean> {
+  const fullMsg = await getMessage(gmail, messageId, "full");
+
+  // Skip spam/trash messages entirely
+  if (shouldExcludeMessage(fullMsg.labelIds ?? undefined)) {
+    return false;
+  }
+
+  const headers = parseMessageHeaders(fullMsg);
+  const body = getMessageBody(fullMsg);
+
+  writeResource(email, "messages", messageId, {
+    ...fullMsg,
+    _headers: headers,
+    _body: body,
+  });
+
+  // Only download attachments from non-promotions messages
+  if (includeAttachments && shouldDownloadAttachments(fullMsg.labelIds ?? undefined)) {
+    const attachments = getAttachmentInfos(fullMsg);
+    await Promise.all(
+      attachments.map((att) =>
+        writeAttachment(gmail, email, messageId, att.attachmentId, att.filename),
+      ),
+    );
+  }
+
+  return true;
+}
+
+// Incremental sync using History API
+async function syncMessagesIncremental(
+  gmail: Gmail,
+  email: string,
+  startHistoryId: string,
+  options: {
+    includeAttachments?: boolean;
+    onProgress?: ProgressCallback;
+  },
+): Promise<{ synced: number; removed: number; historyId: string }> {
+  let synced = 0;
+  let removed = 0;
+  let latestHistoryId = startHistoryId;
+  const BATCH_SIZE = 20;
+
+  // Collect all changes from history
+  const addedMessageIds = new Set<string>();
+  const deletedMessageIds = new Set<string>();
+
+  let pageToken: string | undefined;
+  do {
+    const result = await listHistory(gmail, {
+      startHistoryId,
+      maxResults: 500,
+      pageToken,
+      historyTypes: ["messageAdded", "messageDeleted"],
+    });
+
+    latestHistoryId = result.historyId;
+
+    for (const record of result.history) {
+      // Track added messages
+      if (record.messagesAdded) {
+        for (const item of record.messagesAdded) {
+          addedMessageIds.add(item.message.id);
+          // If previously marked deleted in this batch, remove from deleted
+          deletedMessageIds.delete(item.message.id);
+        }
+      }
+      // Track deleted messages
+      if (record.messagesDeleted) {
+        for (const item of record.messagesDeleted) {
+          deletedMessageIds.add(item.message.id);
+          // If previously marked added in this batch, remove from added
+          addedMessageIds.delete(item.message.id);
+        }
+      }
+    }
+
+    pageToken = result.nextPageToken;
+  } while (pageToken);
+
+  // Fetch and save added messages in batches
+  const addedIds = Array.from(addedMessageIds);
+  for (let i = 0; i < addedIds.length; i += BATCH_SIZE) {
+    const batch = addedIds.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(
+      batch.map((id) => fetchAndSaveMessage(gmail, email, id, options.includeAttachments)),
+    );
+    // Only count messages that were actually saved (not excluded)
+    synced += results.filter(Boolean).length;
+    options.onProgress?.({ collection: "messages", fetched: synced });
+  }
+
+  // Remove deleted messages
+  for (const id of deletedMessageIds) {
+    if (removeResource(email, "messages", id)) {
+      removed++;
+    }
+  }
+
+  return { synced, removed, historyId: latestHistoryId };
+}
+
 // Sync a single account
 async function syncAccount(
   gmail: Gmail,
@@ -149,15 +280,17 @@ async function syncAccount(
     includeAttachments?: boolean;
     onProgress?: ProgressCallback;
   } = {},
-): Promise<{ synced: Record<string, number>; removed: Record<string, number> }> {
+): Promise<{ synced: Record<string, number>; removed: Record<string, number>; incremental?: boolean }> {
   const state = loadSyncState(email);
   const collectionsToSync = options.collections || [...COLLECTIONS];
-  const isFullSync = options.full || state.lastSyncAt === null;
+  const hasHistoryId = !!state.historyId;
+  const isFullSync = options.full || state.lastSyncAt === null || !hasHistoryId;
 
   const synced: Record<string, number> = {};
   const removed: Record<string, number> = {};
+  let usedIncremental = false;
 
-  // Sync profile
+  // Sync profile and get current historyId
   const profile = await getProfile(gmail);
   ensureDir(getDataDir(email));
   writeFileSync(
@@ -166,7 +299,7 @@ async function syncAccount(
   );
   options.onProgress?.({ collection: "profile", fetched: 1 });
 
-  // Sync labels
+  // Sync labels (always full sync - they're small)
   if (collectionsToSync.includes("labels")) {
     synced.labels = 0;
     removed.labels = 0;
@@ -182,13 +315,12 @@ async function syncAccount(
     }
     options.onProgress?.({ collection: "labels", fetched: synced.labels });
 
-    if (isFullSync) {
-      const existing = getExistingIds(email, "labels");
-      for (const id of existing) {
-        if (!seenIds.has(id)) {
-          removeResource(email, "labels", id);
-          removed.labels++;
-        }
+    // Always clean up stale labels
+    const existing = getExistingIds(email, "labels");
+    for (const id of existing) {
+      if (!seenIds.has(id)) {
+        removeResource(email, "labels", id);
+        removed.labels++;
       }
     }
   }
@@ -197,84 +329,100 @@ async function syncAccount(
   if (collectionsToSync.includes("messages")) {
     synced.messages = 0;
     removed.messages = 0;
-    const seenIds = new Set<string>();
 
-    const savedPageToken = state.pageTokens.messages;
-    const hasSavedProgress = !!savedPageToken;
-    const BATCH_SIZE = 20;
-
-    // Helper to fetch and save a page of messages
-    const fetchPage = async (pageToken?: string) => {
-      const result = await listMessages(gmail, { maxResults: 100, pageToken });
-
-      for (let i = 0; i < result.messages.length; i += BATCH_SIZE) {
-        const batch = result.messages.slice(i, i + BATCH_SIZE);
-
-        await Promise.all(
-          batch.map(async (msg) => {
-            const fullMsg = await getMessage(gmail, msg.id, "full");
-            const headers = parseMessageHeaders(fullMsg);
-            const body = getMessageBody(fullMsg);
-
-            writeResource(email, "messages", msg.id, {
-              ...fullMsg,
-              _headers: headers,
-              _body: body,
-            });
-            seenIds.add(msg.id);
-
-            if (options.includeAttachments) {
-              const attachments = getAttachmentInfos(fullMsg);
-              await Promise.all(
-                attachments.map((att) =>
-                  writeAttachment(gmail, email, msg.id, att.attachmentId, att.filename),
-                ),
-              );
-              if (attachments.length > 0) {
-                synced.attachments = (synced.attachments || 0) + attachments.length;
-              }
-            }
-          }),
-        );
-
-        synced.messages += batch.length;
-        options.onProgress?.({ collection: "messages", fetched: synced.messages });
-      }
-
-      return result.nextPageToken;
-    };
-
-    // Step 1: Always fetch newest first (no pageToken)
-    let nextPageToken = await fetchPage();
-
-    // Step 2: If we have saved progress from incomplete sync, continue from there
-    // Otherwise, for incremental sync, we're done after getting newest
-    if (hasSavedProgress || isFullSync) {
-      let pageToken: string | undefined = hasSavedProgress ? savedPageToken! : nextPageToken;
-
-      while (pageToken) {
-        state.pageTokens.messages = pageToken;
-        saveSyncState(email, state);
-
-        const next = await fetchPage(pageToken);
-        pageToken = next || undefined;
-      }
-    }
-
-    // Clear pageToken when complete
-    state.pageTokens.messages = null;
-    saveSyncState(email, state);
-    options.onProgress?.({ collection: "messages", fetched: synced.messages });
-
-    if (isFullSync) {
-      const existing = getExistingIds(email, "messages");
-      for (const id of existing) {
-        if (!seenIds.has(id)) {
-          removeResource(email, "messages", id);
-          removed.messages++;
+    // Try incremental sync if we have a historyId and not forcing full sync
+    if (!isFullSync && state.historyId) {
+      try {
+        options.onProgress?.({ collection: "messages (incremental)", fetched: 0 });
+        const result = await syncMessagesIncremental(gmail, email, state.historyId, {
+          includeAttachments: options.includeAttachments,
+          onProgress: options.onProgress,
+        });
+        synced.messages = result.synced;
+        removed.messages = result.removed;
+        state.historyId = result.historyId;
+        usedIncremental = true;
+      } catch (err) {
+        // If historyId expired (404), fall back to full sync
+        if (isHistoryIdExpiredError(err)) {
+          process.stderr.write("\n  History expired, falling back to full sync...\n");
+          // Continue to full sync below
+        } else {
+          throw err;
         }
       }
     }
+
+    // Full sync if incremental didn't run or failed
+    if (!usedIncremental) {
+      const seenIds = new Set<string>();
+      const savedPageToken = state.pageTokens.messages;
+      const hasSavedProgress = !!savedPageToken;
+      const BATCH_SIZE = 20;
+
+      // Exclude spam and trash from sync
+      const excludeQuery = "-in:spam -in:trash";
+
+      // Helper to fetch and save a page of messages
+      const fetchPage = async (pageToken?: string) => {
+        const result = await listMessages(gmail, { maxResults: 100, pageToken, q: excludeQuery });
+
+        for (let i = 0; i < result.messages.length; i += BATCH_SIZE) {
+          const batch = result.messages.slice(i, i + BATCH_SIZE);
+
+          const results = await Promise.all(
+            batch.map(async (msg) => {
+              const saved = await fetchAndSaveMessage(gmail, email, msg.id, options.includeAttachments);
+              if (saved) seenIds.add(msg.id);
+              return saved;
+            }),
+          );
+
+          synced.messages += results.filter(Boolean).length;
+          options.onProgress?.({ collection: "messages", fetched: synced.messages });
+        }
+
+        return result.nextPageToken;
+      };
+
+      // Step 1: Always fetch newest first (no pageToken)
+      let nextPageToken = await fetchPage();
+
+      // Step 2: If we have saved progress from incomplete sync, continue from there
+      if (hasSavedProgress || isFullSync) {
+        let pageToken: string | undefined = hasSavedProgress ? savedPageToken! : nextPageToken;
+
+        while (pageToken) {
+          state.pageTokens.messages = pageToken;
+          saveSyncState(email, state);
+
+          const next = await fetchPage(pageToken);
+          pageToken = next || undefined;
+        }
+      }
+
+      // Clear pageToken when complete
+      state.pageTokens.messages = null;
+
+      // Clean up deleted messages on full sync
+      if (isFullSync) {
+        const existing = getExistingIds(email, "messages");
+        for (const id of existing) {
+          if (!seenIds.has(id)) {
+            removeResource(email, "messages", id);
+            removed.messages++;
+          }
+        }
+      }
+
+      // Get historyId from profile for future incremental syncs
+      // Profile has the current historyId which is always the latest
+      if (profile.historyId) {
+        state.historyId = profile.historyId;
+      }
+    }
+
+    options.onProgress?.({ collection: "messages", fetched: synced.messages });
   }
 
   // Sync threads
@@ -373,7 +521,7 @@ async function syncAccount(
   state.lastSyncAt = new Date().toISOString();
   saveSyncState(email, state);
 
-  return { synced, removed };
+  return { synced, removed, incremental: usedIncremental };
 }
 
 // Main sync function
@@ -391,6 +539,7 @@ export async function sync(
   email: string;
   synced: Record<string, number>;
   removed: Record<string, number>;
+  incremental?: boolean;
   error?: string;
 }>> {
   const accounts = options.accounts || listAccounts();
@@ -398,6 +547,7 @@ export async function sync(
     email: string;
     synced: Record<string, number>;
     removed: Record<string, number>;
+    incremental?: boolean;
     error?: string;
   }> = [];
 
@@ -431,6 +581,7 @@ export async function sync(
 export function getSyncStatus(email: string): {
   dataDir: string;
   lastSyncAt: string | null;
+  historyId: string | null;
   collections: Record<string, { count: number }>;
 } {
   const dataDir = getDataDir(email);
@@ -442,7 +593,7 @@ export function getSyncStatus(email: string): {
     collections[collection] = { count: ids.size };
   }
 
-  return { dataDir, lastSyncAt: state.lastSyncAt, collections };
+  return { dataDir, lastSyncAt: state.lastSyncAt, historyId: state.historyId || null, collections };
 }
 
 // Reset sync state

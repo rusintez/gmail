@@ -581,7 +581,8 @@ program
         const totalSynced = Object.values(result.synced).reduce((a, b) => a + b, 0);
         const totalRemoved = Object.values(result.removed).reduce((a, b) => a + b, 0);
         const removedStr = totalRemoved > 0 ? `, ${totalRemoved} removed` : "";
-        console.log(`  ${result.email}: ${totalSynced} items${removedStr}`);
+        const modeStr = result.incremental ? " (incremental)" : "";
+        console.log(`  ${result.email}: ${totalSynced} items${removedStr}${modeStr}`);
       }
     }
   });
@@ -611,6 +612,7 @@ program
     console.log(
       `Last sync: ${status.lastSyncAt ? new Date(status.lastSyncAt).toLocaleString() : "never"}`,
     );
+    console.log(`History ID: ${status.historyId || "none (next sync will be full)"}`);
     console.log("\nCollections:");
     for (const [name, info] of Object.entries(status.collections)) {
       console.log(`  ${name}: ${info.count} items`);

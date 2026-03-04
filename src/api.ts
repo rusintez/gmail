@@ -354,3 +354,61 @@ export function getMessageBody(message: Message): string {
 
   return findTextPart(payload.parts);
 }
+
+// History API for incremental sync
+export type HistoryType = "messageAdded" | "messageDeleted" | "labelAdded" | "labelRemoved";
+
+export interface HistoryRecord {
+  id: string;
+  messages?: Array<{ id: string; threadId: string }>;
+  messagesAdded?: Array<{ message: { id: string; threadId: string; labelIds?: string[] } }>;
+  messagesDeleted?: Array<{ message: { id: string; threadId: string } }>;
+  labelsAdded?: Array<{ message: { id: string; threadId: string }; labelIds: string[] }>;
+  labelsRemoved?: Array<{ message: { id: string; threadId: string }; labelIds: string[] }>;
+}
+
+export interface ListHistoryOptions {
+  startHistoryId: string;
+  maxResults?: number;
+  pageToken?: string;
+  labelId?: string;
+  historyTypes?: HistoryType[];
+}
+
+export interface ListHistoryResult {
+  history: HistoryRecord[];
+  nextPageToken?: string;
+  historyId: string; // Current latest historyId
+}
+
+export async function listHistory(
+  gmail: Gmail,
+  options: ListHistoryOptions,
+): Promise<ListHistoryResult> {
+  return withRetry(async () => {
+    const res = await gmail.users.history.list({
+      userId: "me",
+      startHistoryId: options.startHistoryId,
+      maxResults: options.maxResults || 500,
+      pageToken: options.pageToken,
+      labelId: options.labelId,
+      historyTypes: options.historyTypes,
+    });
+    return {
+      history: (res.data.history || []) as HistoryRecord[],
+      nextPageToken: res.data.nextPageToken || undefined,
+      historyId: res.data.historyId || options.startHistoryId,
+    };
+  }, "listHistory");
+}
+
+// Check if error is a historyId expired error (requires full sync)
+export function isHistoryIdExpiredError(error: unknown): boolean {
+  if (error && typeof error === "object") {
+    const e = error as { code?: number; status?: number; message?: string };
+    // 404 means historyId is too old or invalid
+    if (e.code === 404 || e.status === 404) return true;
+    if (e.message?.includes("Start history id")) return true;
+  }
+  return false;
+}
